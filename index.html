@@ -414,7 +414,7 @@ function startListeners(){
   });
 }
 
-const screens=["inicio","inventario","venta","historial"];
+const screens=["inicio","inventario","venta","historial","escaner"];
 window.nav=s=>{
   screens.forEach(id=>{
     document.getElementById("screen-"+id).classList.toggle("active",id===s);
