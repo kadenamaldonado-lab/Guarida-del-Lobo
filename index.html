@@ -299,9 +299,9 @@ window.doLogin=async()=>{
   const btn=document.getElementById("login-btn");
   errEl.style.display="none";btn.disabled=true;btn.textContent="Verificando...";
   try{
-    const q=query(collection(db,"usuarios"),where("usuario","==",user),where("password","==",pass));
+    const q=query(collection(db,"users"),where("usuario","==",user),where("password","==",pass));
     const snap=await getDocs(q);
-    if(snap.empty){throw new Error("Usuario o contraseña incorrectos")}
+    if(snap.empty){throw new Error("user o contraseña incorrectos")}
     const userData=snap.docs[0].data();
     currentUser=user;
     currentRole=userData.rol;
