@@ -120,6 +120,7 @@
     .empty p{font-size:14px}
     ::-webkit-scrollbar{width:0}
   </style>
+  <script async src="https://cdn.jsdelivr.net/npm/@zxing/library@latest"></script>
 </head>
 <body>
 
@@ -194,6 +195,50 @@
       </div>
       <div id="venta-empty-cart" class="empty"><div class="empty-ico">🛒</div><p>Agrega productos al carrito</p></div>
     </section>
+    <section id="screen-recibir" class="screen">
+      <div class="section-title">Recibir Mercadería</div>
+      
+      <div style="display:flex;gap:10px;margin-bottom:12px">
+        <div class="search-wrap" style="flex:1;margin-bottom:0">
+          <span class="search-ico">🔍</span>
+          <input class="inp" id="search-recibir" placeholder="Buscar producto…" oninput="renderRecibirCatalogo()"/>
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="toggleEscanerRecibir()">📱 Escanear</button>
+      </div>
+      
+      <div id="recibir-scanner" style="display:none;margin-bottom:14px;border-radius:12px;overflow:hidden">
+        <video id="video-recibir" style="width:100%;height:300px;background:#000"></video>
+      </div>
+      
+      <div id="recibir-catalogo"></div>
+      
+      <div id="recibir-form" style="display:none">
+        <div class="card card-gold">
+          <div style="margin-bottom:14px">
+            <div style="font-size:12px;color:var(--crema-dim);text-transform:uppercase">Producto Seleccionado</div>
+            <div id="recibir-prod-name" style="font-family:'Cinzel',serif;font-size:16px;color:var(--dorado);margin-top:4px"></div>
+          </div>
+          
+          <div class="input-group">
+            <label>Cantidad a Recibir</label>
+            <input class="inp" type="number" id="recibir-qty" placeholder="0" inputmode="numeric" min="1"/>
+          </div>
+          
+          <div class="input-group">
+            <label>Precio Costo Unitario (S/)</label>
+            <input class="inp" type="number" id="recibir-cost" placeholder="0.00" inputmode="decimal"/>
+          </div>
+          
+          <div style="display:flex;gap:10px;margin-top:14px">
+            <button class="btn btn-ghost" style="flex:1" onclick="cancelarRecibir()">Cancelar</button>
+            <button class="btn btn-gold" style="flex:1" onclick="confirmarRecepcion()">✓ Confirmar</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="section-title">Histórico de Recepciones</div>
+      <div id="recibir-historial"></div>
+    </section>
 
     <section id="screen-historial" class="screen">
       <div class="stat-grid" style="margin-top:4px">
@@ -209,6 +254,7 @@
     <button class="nav-btn active" onclick="nav('inicio')" id="nb-inicio"><span class="ico">🏠</span>Inicio</button>
     <button class="nav-btn" onclick="nav('inventario')" id="nb-inventario"><span class="ico">📦</span>Inventario</button>
     <button class="nav-btn" onclick="nav('venta')" id="nb-venta"><span class="ico">🛒</span>Venta</button>
+    <button class="nav-btn" onclick="nav('recibir')" id="nb-recibir"><span class="ico">📥</span>Recibir</button>
     <button class="nav-btn" onclick="nav('historial')" id="nb-historial"><span class="ico">📊</span>Historial</button>
   </nav>
 </div>
@@ -269,7 +315,8 @@ import{getFirestore,collection,doc,addDoc,updateDoc,deleteDoc,onSnapshot,query,o
 const app=initializeApp({apiKey:"AIzaSyDiUKzKY_AHvyVyREc3oVWeNn4mHQqgyB8",authDomain:"la-guarida-del-lobo.firebaseapp.com",projectId:"la-guarida-del-lobo",storageBucket:"la-guarida-del-lobo.firebasestorage.app",messagingSenderId:"679592047752",appId:"1:679592047752:web:005d4f45261c7f23881b3d"});
 const db=getFirestore(app);
 
-let products=[],sales=[],cart=[],unsubP=null,unsubS=null,currentUser=null,currentRole=null;
+let products=[],sales=[],cart=[],recepciones=[],unsubP=null,unsubS=null,unsubR=null,currentUser=null,currentRole=null;
+let selectedProductForRecibir=null,codeReader=null,stopScanning=false;
 
 const fmt=n=>"S/ "+parseFloat(n||0).toFixed(2);
 const today=()=>new Date().toISOString().slice(0,10);
@@ -301,7 +348,7 @@ window.doLogin=async()=>{
   try{
     const q=query(collection(db,"users"),where("user","==",user),where("password","==",pass));
     const snap=await getDocs(q);
-    if(snap.empty){throw new Error("user o contraseña incorrectos")}
+    if(snap.empty){throw new Error("Usuario o contraseña incorrectos")}
     const userData=snap.docs[0].data();
     currentUser=user;
     currentRole=userData.rol;
@@ -320,7 +367,8 @@ window.doLogin=async()=>{
 };
 
 window.doLogout=()=>showConfirm("¿Cerrar sesión?","Serás redirigido a la pantalla de acceso.",()=>{
-  if(unsubP)unsubP();if(unsubS)unsubS();
+  if(unsubP)unsubP();if(unsubS)unsubS();if(unsubR)unsubR();
+  stopScanning=true;
   currentUser=null;
   currentRole=null;
   sessionStorage.removeItem("guardiaUser");
@@ -332,7 +380,7 @@ window.doLogout=()=>showConfirm("¿Cerrar sesión?","Serás redirigido a la pant
   btn.textContent="Ingresar a La Guarida";
   document.getElementById("login-user").value="";
   document.getElementById("login-pass").value="";
-  products=[];sales=[];cart=[];
+  products=[];sales=[];cart=[];recepciones=[];
 });
 
 document.getElementById("login-pass").addEventListener("keydown",e=>{if(e.key==="Enter")window.doLogin()});
@@ -358,15 +406,19 @@ window.addEventListener("DOMContentLoaded",()=>{
 function startListeners(){
   unsubP=onSnapshot(query(collection(db,"products"),orderBy("name")),snap=>{
     products=snap.docs.map(d=>({id:d.id,...d.data()}));
-    renderInicio();renderInventario();renderVentaCatalogo();
+    renderInicio();renderInventario();renderVentaCatalogo();renderRecibirCatalogo();
   });
   unsubS=onSnapshot(query(collection(db,"sales"),orderBy("createdAt","desc")),snap=>{
     sales=snap.docs.map(d=>({id:d.id,...d.data()}));
     renderInicio();renderHistorial();
   });
+  unsubR=onSnapshot(query(collection(db,"recepciones"),orderBy("createdAt","desc")),snap=>{
+    recepciones=snap.docs.map(d=>({id:d.id,...d.data()}));
+    renderRecibirHistorial();
+  });
 }
 
-const screens=["inicio","inventario","venta","historial"];
+const screens=["inicio","inventario","venta","recibir","historial"];
 window.nav=s=>{
   screens.forEach(id=>{
     document.getElementById("screen-"+id).classList.toggle("active",id===s);
@@ -543,7 +595,6 @@ window.updateNavForRole=()=>{
   allBtns.forEach(btn=>btn.style.display="flex");
   if(currentRole==="almacenero"){
     document.getElementById("nb-venta").style.display="none";
-    document.getElementById("nb-historial").style.display="none";
     nav("inventario");
   }else if(currentRole==="vendedor"){
     document.getElementById("nb-inventario").style.display="none";
@@ -551,6 +602,134 @@ window.updateNavForRole=()=>{
     nav("venta");
   }
 };
+
+window.renderRecibirCatalogo=()=>{
+  const q=(document.getElementById("search-recibir")?.value||"").toLowerCase();
+  let list=products;
+  if(q)list=list.filter(p=>p.name.toLowerCase().includes(q)||(p.cat||"").toLowerCase().includes(q));
+  const el=document.getElementById("recibir-catalogo");
+  if(!list.length){el.innerHTML=`<div class="empty" style="padding:16px 0"><p>${q?"Sin resultados":"Sin productos disponibles"}</p></div>`;return}
+  el.innerHTML=list.slice(0,12).map(p=>`<div class="prod-item" onclick="seleccionarProductoRecibir('${p.id}',JSON.parse(this.dataset.p))" style="cursor:pointer" data-p="${JSON.stringify(p).replace(/"/g,"&quot;")}"><span class="prod-emoji">${p.cat.split(" ")[0]}</span><div class="prod-info"><div class="prod-name">${p.name}</div><div class="prod-meta">${p.brand||""}</div></div><div class="prod-price">${fmt(p.price)}</div></div>`).join("");
+};
+
+window.seleccionarProductoRecibir=(id,prod)=>{
+  selectedProductForRecibir=prod;
+  stopScanning=true;
+  document.getElementById("recibir-catalogo").style.display="none";
+  document.getElementById("search-recibir").style.display="none";
+  document.getElementById("recibir-scanner").style.display="none";
+  document.getElementById("recibir-form").style.display="block";
+  document.getElementById("recibir-prod-name").textContent=prod.name;
+  document.getElementById("recibir-qty").value="";
+  document.getElementById("recibir-cost").value=prod.cost||"";
+};
+
+window.cancelarRecibir=()=>{
+  selectedProductForRecibir=null;
+  stopScanning=true;
+  document.getElementById("recibir-form").style.display="none";
+  document.getElementById("recibir-catalogo").style.display="block";
+  document.getElementById("search-recibir").style.display="block";
+  renderRecibirCatalogo();
+};
+
+window.confirmarRecepcion=async()=>{
+  const qty=parseInt(document.getElementById("recibir-qty").value)||0;
+  const cost=parseFloat(document.getElementById("recibir-cost").value)||0;
+  if(!qty){toast("⚠️ Ingresa una cantidad");return}
+  if(!selectedProductForRecibir){toast("⚠️ Selecciona un producto");return}
+  
+  try{
+    const now=new Date();
+    const fecha=today();
+    const hora=now.getHours().toString().padStart(2,"0")+":"+now.getMinutes().toString().padStart(2,"0");
+    
+    await addDoc(collection(db,"recepciones"),{
+      fecha,
+      hora,
+      almacenero:currentUser,
+      producto_id:selectedProductForRecibir.id,
+      producto_nombre:selectedProductForRecibir.name,
+      cantidad:qty,
+      precio_costo:cost,
+      total_costo:qty*cost,
+      createdAt:serverTimestamp()
+    });
+    
+    const nuevoStock=selectedProductForRecibir.stock+qty;
+    await updateDoc(doc(db,"products",selectedProductForRecibir.id),{stock:nuevoStock});
+    
+    toast("✅ Recepción confirmada - "+qty+" unidades agregadas");
+    cancelarRecibir();
+  }catch(e){
+    toast("❌ Error: "+e.message);
+  }
+};
+
+function renderRecibirHistorial(){
+  const el=document.getElementById("recibir-historial");
+  if(!recepciones.length){
+    el.innerHTML=`<div class="empty"><div class="empty-ico">📥</div><p>Sin recepciones registradas</p></div>`;
+    return;
+  }
+  el.innerHTML=recepciones.map(r=>`
+    <div class="sale-item">
+      <div class="sale-header">
+        <span class="sale-id">#${r.id.slice(-5).toUpperCase()}</span>
+        <span class="sale-time">${r.fecha||""} · ${r.hora||""}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="flex:1">
+          <div class="sale-products">${r.producto_nombre} · ${r.cantidad} unidades</div>
+          <div style="font-size:11px;color:var(--crema-dim);margin-top:4px">Costo: ${fmt(r.precio_costo)} c/u</div>
+        </div>
+        <div class="sale-total">${fmt(r.total_costo)}</div>
+      </div>
+    </div>
+  `).join("");
+}
+
+window.toggleEscanerRecibir=async()=>{
+  const scanner=document.getElementById("recibir-scanner");
+  if(scanner.style.display==="none"){
+    scanner.style.display="block";
+    stopScanning=false;
+    iniciarEscanerRecibir();
+  }else{
+    scanner.style.display="none";
+    stopScanning=true;
+    if(codeReader)codeReader.reset();
+  }
+};
+
+window.iniciarEscanerRecibir=async()=>{
+  try{
+    const video=document.getElementById("video-recibir");
+    if(!ZXing)return;
+    
+    codeReader=new ZXing.BrowserMultiFormatReader();
+    const devices=await codeReader.listVideoInputDevices();
+    const selectedDeviceId=devices[devices.length-1].deviceId;
+    
+    const result=await codeReader.decodeFromVideoDevice(selectedDeviceId,video,async(result,err)=>{
+      if(result&&!stopScanning){
+        const codigo=result.text;
+        stopScanning=true;
+        const prod=products.find(p=>p.barcode===codigo);
+        if(prod){
+          seleccionarProductoRecibir(prod.id,prod);
+          toast("✓ Producto encontrado por código");
+        }else{
+          toast("⚠️ Código no encontrado en inventario");
+          stopScanning=false;
+        }
+      }
+    });
+  }catch(e){
+    toast("❌ Error al acceder a cámara: "+e.message);
+  }
+};
+
 if("serviceWorker"in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});
 </script>
 </body>
